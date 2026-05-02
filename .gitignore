@@ -4,3 +4,5 @@ __pycache__/
 *.pyc
 docs/
 plots/
+report/
+.DS_STORE

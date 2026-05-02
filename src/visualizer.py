@@ -29,7 +29,7 @@ def plot_gridworld(env, agent, title="Grid World - State Values and Policy"):
     action_names = ['N', 'S', 'E', 'W']  # North, South, East, West
     action_dirs = {0: (-0.5, 0), 1: (0.5, 0), 2: (0, 0.5), 3: (0, -0.5)}
 
-    fig, ax = plt.subplots(figsize=(10, 10))
+    fig, ax = plt.subplots(figsize=(8, 8))
 
     # Normalize state values for coloring
     norm = Normalize(vmin=state_values.min(), vmax=state_values.max())

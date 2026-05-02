@@ -1,41 +1,25 @@
-"""
-5x5 Grid World Environment for RL agents.
+"""Tile-driven grid world environment for RL agents.
 
-Grid layout:
-  1   2   3   4   5
-1 [ ] [ ] [ ] [ ] [ ]
-2 [S] [ ] [ ] [J] [ ]
-3 [ ] [ ] [X] [X] [X]
-4 [ ] [ ] [X] [*] [ ]
-5 [ ] [ ] [ ] [ ] [G]
-
-S = Start [2,1], G = Goal [5,5] (+10)
-J = Jump [2,4] -> [4,4] (+5)
-X = Obstacles [3,3], [4,3]
-* = Jump destination [4,4]
+The grid layout, rewards, and special tiles are all defined by a
+WorldConfig loaded from YAML — no tile logic is hardcoded here.
 """
 
 import numpy as np
+from src.world_config import WorldConfig
 
 
 class GridWorld:
-    """5x5 grid world environment."""
+    """Configurable grid world environment."""
 
-    def __init__(self):
-        self.grid_size = 5
-        self.n_states = 25  # 5x5
-        self.n_actions = 4  # North, South, East, West
+    def __init__(self, config: WorldConfig):
+        self.config = config
+        self.grid_size = config.grid_size
+        self.n_states = config.n_states
+        self.n_actions = config.n_actions
+        self.grid = config.grid
+        self.current_state = self.pos_to_state(*config.start)
 
-        # Grid configuration (1-indexed in problem, 0-indexed here)
-        self.start_pos = (1, 0)      # [2,1] in 1-indexed
-        self.goal_pos = (4, 4)        # [5,5] in 1-indexed
-        self.jump_from = (1, 3)       # [2,4] in 1-indexed
-        self.jump_to = (3, 3)         # [4,4] in 1-indexed
-
-        # Obstacles (black cells)
-        self.obstacles = {(2, 2), (2, 3), (2, 4), (3, 2)}  # [3,3], [3,4], [3,5], [4,3] in 1-indexed
-
-        self.current_state = self.pos_to_state(*self.start_pos)
+    # ── coordinate helpers ──────────────────────────────────────
 
     def pos_to_state(self, row, col):
         """Convert (row, col) to flat state index."""
@@ -45,63 +29,87 @@ class GridWorld:
         """Convert flat state index to (row, col)."""
         return divmod(state, self.grid_size)
 
+    # ── environment interface ───────────────────────────────────
+
     def reset(self):
         """Reset environment to start position."""
-        self.current_state = self.pos_to_state(*self.start_pos)
+        self.current_state = self.pos_to_state(*self.config.start)
         return self.current_state
 
     def step(self, action):
-        """
-        Execute one action.
+        """Execute one action.
 
         Actions: 0=North, 1=South, 2=East, 3=West
 
         Returns:
-            next_state (int): resulting state
-            reward (float): reward for this transition
-            done (bool): whether episode is finished
+            (next_state, reward, done)
         """
         row, col = self.state_to_pos(self.current_state)
 
-        # Apply action
+        # Apply movement with boundary clamping
         if action == 0:      # North
-            row = max(0, row - 1)
+            new_row, new_col = max(0, row - 1), col
         elif action == 1:    # South
-            row = min(self.grid_size - 1, row + 1)
+            new_row, new_col = min(self.grid_size - 1, row + 1), col
         elif action == 2:    # East
-            col = min(self.grid_size - 1, col + 1)
+            new_row, new_col = row, min(self.grid_size - 1, col + 1)
         elif action == 3:    # West
-            col = max(0, col - 1)
+            new_row, new_col = row, max(0, col - 1)
 
-        # Check if new position is an obstacle
-        if (row, col) in self.obstacles:
-            # Can't move there, stay in place
-            row, col = self.state_to_pos(self.current_state)
-            reward = -1.0
-            self.current_state = self.pos_to_state(row, col)
-            return self.current_state, reward, False
+        tile = self.grid[new_row][new_col]
 
-        new_state = self.pos_to_state(row, col)
+        # Impassable tile (wall/obstacle) — stay in place
+        if not tile.passable:
+            return self.current_state, tile.reward, False
 
-        # Check for jump
-        if (row, col) == self.jump_from:
-            new_state = self.pos_to_state(*self.jump_to)
-            reward = 5.0
-            self.current_state = new_state
-            return new_state, reward, False
+        # Redirect tile (jump/teleport)
+        if tile.redirect is not None:
+            self.current_state = self.pos_to_state(*tile.redirect)
+            return self.current_state, tile.reward, tile.terminal
 
-        # Check for goal
-        if (row, col) == self.goal_pos:
-            reward = 10.0
-            self.current_state = new_state
-            return new_state, reward, True
-
-        # Default penalty
-        reward = -1.0
-        self.current_state = new_state
-        return new_state, reward, False
+        # Normal tile (possibly terminal like a goal)
+        self.current_state = self.pos_to_state(new_row, new_col)
+        return self.current_state, tile.reward, tile.terminal
 
     def get_grid_visualization(self):
-        """Return grid layout with state indices for visualization."""
-        grid = np.arange(self.n_states).reshape(self.grid_size, self.grid_size)
-        return grid
+        """Return grid of state indices for visualization."""
+        return np.arange(self.n_states).reshape(self.grid_size, self.grid_size)
+
+    # ── backward-compat properties (used by visualizer) ─────────
+
+    @property
+    def start_pos(self):
+        return self.config.start
+
+    @property
+    def goal_pos(self):
+        for r in range(self.grid_size):
+            for c in range(self.grid_size):
+                if self.grid[r][c].terminal:
+                    return (r, c)
+        return None
+
+    @property
+    def jump_from(self):
+        for r in range(self.grid_size):
+            for c in range(self.grid_size):
+                if self.grid[r][c].redirect is not None:
+                    return (r, c)
+        return None
+
+    @property
+    def jump_to(self):
+        for r in range(self.grid_size):
+            for c in range(self.grid_size):
+                if self.grid[r][c].redirect is not None:
+                    return self.grid[r][c].redirect
+        return None
+
+    @property
+    def obstacles(self):
+        return {
+            (r, c)
+            for r in range(self.grid_size)
+            for c in range(self.grid_size)
+            if not self.grid[r][c].passable
+        }
